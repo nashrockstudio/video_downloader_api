@@ -25,8 +25,8 @@ def extract_video_info(url):
         'no_warnings': True,
         'skip_download': True,
         'forcejson': True,
-        'cookiefile': 'cookies.txt',
         'merge_output_format': 'mp4',
+        'cookiefile': 'cookies.txt',  # ✅ Support for private video access
     }
 
     try:
