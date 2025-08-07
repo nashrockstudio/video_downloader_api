@@ -1,68 +1,43 @@
-from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Query, HTTPException
 import yt_dlp
-import requests
 
 router = APIRouter()
 
-class Format(BaseModel):
-    quality: str
-    file_size: str
-    download_url: str
-
-class DownloadResponse(BaseModel):
-    title: str
-    thumbnail: str
-    formats: list[Format]
-
-def get_file_size(url):
+@router.get("/download")
+async def download_dailymotion(
+    url: str = Query(..., description="Dailymotion URL (e.g., https://www.dailymotion.com/video/x8xxxxx)")
+):
     try:
-        response = requests.head(url, allow_redirects=True, timeout=10)
-        size = int(response.headers.get("Content-Length", 0))
-        return round(size / (1024 * 1024), 2)  # MB
-    except:
-        return 0.0
+        # 1. STRICT Dailymotion URL validation
+        if not ("dailymotion.com/video/" in url or "dai.ly/" in url):
+            raise HTTPException(status_code=400, detail="URL must be from Dailymotion (e.g., https://www.dailymotion.com/video/x8xxxxx)")
 
-@router.get("/download/dailymotion", response_model=DownloadResponse)
-async def download_dailymotion(url: str = Query(..., description="Dailymotion video URL")):
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "forcejson": True,
-    }
+        # 2. Configure yt-dlp to ONLY accept Dailymotion
+        ydl_opts = {
+            "quiet": True,
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "merge_output_format": "mp4",
+            "force_generic_extractor": False,  # Important!
+            "allowed_extractors": ["dailymotion"],  # Only allow Dailymotion
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.dailymotion.com",
+            },
+        }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
+        # 3. Extract info with strict Dailymotion check
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-        except Exception:
-            return {
-                "title": "Unavailable",
-                "thumbnail": "",
-                "formats": [{
-                    "quality": "Unavailable",
-                    "file_size": "0 MB",
-                    "download_url": "No valid direct download link found"
-                }]
-            }
+            
+            # Additional check to confirm it's Dailymotion
+            if "dailymotion.com" not in info.get("webpage_url", "") and "dai.ly" not in info.get("webpage_url", ""):
+                raise HTTPException(status_code=400, detail="This is not a valid Dailymotion video")
 
-    formats = []
-    for fmt in info.get("formats", []):
-        if not fmt.get("url") or fmt.get("vcodec") == "none":
-            continue
+        # ... [rest of your code: format filtering, etc.] ...
 
-        quality = fmt.get("format_note") or fmt.get("height", "Unknown")
-        size = fmt.get("filesize")
-        if not size:
-            size = get_file_size(fmt["url"])
-
-        formats.append({
-            "quality": f"{quality}p" if isinstance(quality, int) else quality,
-            "file_size": f"{round(size / (1024 * 1024), 2)} MB" if size else "0.0 MB",
-            "download_url": fmt["url"]
-        })
-
-    return {
-        "title": info.get("title", "No Title"),
-        "thumbnail": info.get("thumbnail", ""),
-        "formats": formats
-    }
+    except yt_dlp.utils.DownloadError as e:
+        if "Unsupported URL" in str(e):
+            raise HTTPException(status_code=400, detail="This URL is not supported (must be Dailymotion)")
+        raise HTTPException(status_code=500, detail=f"Download error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
